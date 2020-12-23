@@ -1,201 +1,303 @@
+# -*- coding: utf-8 -*-
 """
-Created on Fri Dec 18 13:35:51 2020
+Created on Thu Dec 17 20:21:34 2020
 
 @author: MYCoskun
-
-https://github.com/pythonlessons/Reinforcement_Learning/blob/master/01_CartPole-reinforcement-learning/Cartpole_DQN.py
 """
 
-import numpy as np
+"""
+Classic cart-pole system implemented by Rich Sutton et al.
+Copied from http://incompleteideas.net/sutton/book/code/pole.c
+permalink: https://perma.cc/C9ZM-652R
+"""
+
+import math
 import gym
-
-env_dict = gym.envs.registration.registry.env_specs.copy()
-for env in env_dict:
-    if 'DFCU_EHS-v0' in env:
-        print("Remove {} from registry".format(env))
-        del gym.envs.registration.registry.env_specs[env]
-import gym_DFCU_EHS
-# env = gym.make('DFCU_EHS-v0')
-
-import gym.spaces
-
-import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-import random
-from collections import deque
-from keras.models import Model, load_model
-from keras.layers import Input, Dense
-from keras.optimizers import Adam, RMSprop
+from gym import spaces, logger
+from gym.utils import seeding
+import numpy as np
 import matplotlib.pyplot as plt
 
 
-# env = gym.make('CartPole-v1')
+class DFCU_EHSEnv(gym.Env):
+    """
+    Description:
+        
+    Source:
+        
+    Observation:
+        Type: Box(4)
+        Num     Observation               Min                     Max
+        0       Cart Position             -4.8                    4.8
+        1       Cart Velocity             -Inf                    Inf
+        2       Pole Angle                -0.418 rad (-24 deg)    0.418 rad (24 deg)
+        3       Pole Angular Velocity     -Inf                    Inf
+    Actions:
+        Type: Discrete(2)
+        Num   Action
+        0     Push cart to the left
+        1     Push cart to the right
+        Note: The amount the velocity that is reduced or increased is not
+        fixed; it depends on the angle the pole is pointing. This is because
+        the center of gravity of the pole increases the amount of energy needed
+        to move the cart underneath it
+    Reward:
+        Reward is 1 for every step taken, including the termination step
+    Starting State:
+        All observations are assigned a uniform random value in [-0.05..0.05]
+    Episode Termination:
+        Pole Angle is more than 12 degrees.
+        Cart Position is more than 2.4 (center of the cart reaches the edge of
+        the display).
+        Episode length is greater than 200.
+        Solved Requirements:
+        Considered solved when the average return is greater than or equal to
+        195.0 over 100 consecutive trials.
+    """
 
-# env.reset()
-# env.step(np.array([1, 1, 1, 1,3]),3)
+    metadata = {
+        'render.modes': ['human', 'rgb_array'],
+        'video.frames_per_second': 50
+    }
 
-# print(env.action_space.n)
-
-# %% 
-def OurModel(input_shape,action_space):
-    X_input = Input(input_shape)
-    
-    # 'Dense' is the basic form of a neural network layer
-    # Input Layer of state size(4) and Hidden Layer with 512 nodes
-    X = Dense(512, input_shape=input_shape, activation="relu",
-              kernel_initializer='he_uniform')(X_input)
-    
-    # Hidden layer with 256 nodes
-    X = Dense(256, activation="relu", kernel_initializer='he_uniform')(X)
-    
-    # Hidden layer with 64 nodes
-    X = Dense(64, activation="relu", kernel_initializer='he_uniform')(X)
-    
-    # Output Layer with # of actions: 49 nodes
-    X = Dense(action_space, activation="softmax",
-              kernel_initializer='he_uniform')(X)
-    
-    model = Model(inputs = X_input, outputs = X, name = "dfcu")
-    model.compile(loss="mse", optimizer=RMSprop(lr=0.00025, rho=0.95, epsilon=0.01),
-                  metrics=["accuracy"])
-    
-    model.summary()
-    return model
-# %%
-class DQNAgent:
     def __init__(self):
-        self.env = gym.make('DFCU_EHS-v0')
-        self.state_size = self.env.observation_space.shape[0]
-        self.action_size = self.env.action_space.n
-        self.EPISODES = 1000
-        self.memory = deque(maxlen=2000)
+        self.Aa = 0.00125663; # Piston side area [m^2]
+        self.Ab = 0.00094247; # Rod side area [m^2]
+        self.Ba = 1500e6; # Piston side bulk Moduli [Pa]
+        self.Bb = 1500e6; # Rod side bulk Moduli [Pa]
+        self.V0A = 0.001; # Piston side dead-volume [m^3]
+        self.V0B = 0.001; # Rod side dead-volume [m^3]
+        self.xMin = 0; # Min. piston stroke [m]
+        self.xMax = 2; # 0.5->2 | Max. piston stroke [m] 
+        self.b = 0.3; # Critical pressure ratio [-]
+        self.ex = 0.53; # Exponent of valve model [-]
+        self.Kv = 6.3387e-09; # 1.3 lpm @ 3.5 MPa
+        self.Ps = 10e6+101325; # Supply pressure [Pa]
+        self.Pt = 101325; # 1 atm Tank pressure [Pa]
+        self.addMass = 250 # Additional mass [Kg]
+        self.mPiston = 8; # Piston mass [Kg]
+        self.m = self.addMass + self.mPiston # Total mass [Kg]
+        self.tau = 0.0001  # seconds between state updates
+        self.FmassLoad = 1*9.805*self.addMass # The MASS force exerted on the 
+                                      # piston in the direction of gravity (N)
+        self.Fload = 200 + self.FmassLoad; # The FORCE and MASS force exerted 
+                               # on the piston in the direction of gravity (N)
+
+        # Position at which to fail the episode
+        self.pos_range = np.array([0, self.xMax])
+
+        # Observation space limit
+        low = np.array([self.xMin,
+                        np.finfo(np.float32).min,
+                        -self.xMax,
+                        np.finfo(np.float32).min,
+                        -1e6,
+                        -1e6],
+                       dtype=np.float32)
         
-        self.gamma = 0.95 # discount rate
-        self.epsilon = 1.0 # exploration rate
-        self.epsilon_min = 0.001
-        self.epsilon_decay = 0.999
-        self.batch_size = 64
-        self.train_start = 1000
+        high = np.array([self.xMax,
+                         np.finfo(np.float32).max,
+                         self.xMax,
+                         np.finfo(np.float32).max,
+                         self.Ps,
+                         self.Ps],
+                        dtype=np.float32)
+
+
+        self.action_space = spaces.Discrete(50)
+        self.observation_space = spaces.Box(low, high, dtype=np.float32)
+
+        self.seed()
+        self.viewer = None
+        self.state = None
         
-        self.tau = 1e-4 # sample time
-        self.time = 0
-        self.simTime = 0.001
-        self.env._max_episode_steps = (self.simTime/self.tau)+1
-        self.fig, self.axs = plt.subplots(2)
-        
-        # create main model
-        self.model = OurModel(input_shape=(self.state_size,),
-                              action_space = self.action_size)
-        
-    def remember(self, state, action, reward, next_state, done):
-        self.memory.append((state, action, reward, next_state, done))
-        if len(self.memory) > self.train_start:
-            if self.epsilon > self.epsilon_min:
-                self.epsilon *= self.epsilon_decay
-                
-    def act(self,state):
-        if np.random.random() <= self.epsilon:
-            return random.randrange(self.action_size)
-        else:
-            return np.argmax(self.model.predict(state))
-        
-    def replay(self):
-        if len(self.memory) < self.train_start:
-            return
-        # Randomly sample minibatch from the memory
-        minibatch = random.sample(self.memory, min(len(self.memory), self.batch_size))
-        state = np.zeros((self.batch_size, self.state_size))
-        next_state = np.zeros((self.batch_size, self.state_size))
-        action, reward, done = [], [], []
-        
-        # do this before prediction
-        # for speedup, this could be done on the tensor level
-        # but easier to understand using a loop
-        for i in range(self.batch_size):
-            state[i] = minibatch[i][0]
-            action.append(minibatch[i][1])
-            reward.append(minibatch[i][2])
-            next_state[i] = minibatch[i][3]
-            done.append(minibatch[i][4])
+        self.step_count = 0
+        self.simTime = 0.001 # Simulation time (second)
+        self.max_episode_steps = (self.simTime/self.tau)+1
+        self.steps_beyond_done = None
+        self.t = 0
+
+    def seed(self, seed=None):
+        self.np_random, seed = seeding.np_random(seed)
+        return [seed]
+
+    def step(self, action,ref):
+        # err_msg = "%r (%s) invalid" % (action, type(action))
+        # assert self.action_space.contains(action), err_msg
+        self.step_count += 1
+       
+        def flow_vector(P_1,P_2,Kv,b,x):
+            # Based on Linjama, M., Huova, M., and Karvonen, M., 2012.
+            # Modelling of flow characteristics of on/off valves.
+            # P = Pressure [Pa]
+            # Q = Flowrate [m^3/s]
+            # Kv = Vector of flow coefficient of valve model of DFCU [m^3 s^-1 Pa^x]
+            # b = Vector of critical pressure ratios of valve model of DFCU [-]
+            # x = Vector of exponent of valve model of DFCU [-]
             
-        # do batch prediction to save speed
-        target = self.model.predict(state)
-        target_next = self.model.predict(next_state)
-        
-        for i in range(self.batch_size):
-            # correction on the Q value for the action used
-            if done[i]:
-                target[i][action[i]] = reward[i]
+            # Define valve count at each DFCU
+            # valCount = Kv.size
+            valCount = 1
+            Q = np.zeros((valCount,1))
+            
+            # % Check b and x vector or scalar,
+            if valCount != 1:
+                if b.size == 1:
+                    b_ = b*np.ones((valCount,1))
+                    x_ = x*np.ones((valCount,1))
             else:
-                # Standard - DQN
-                # DQN chooses the max Q value among next actions
-                # selection and evaluation of action is on the target Q Network
-                # Q_max = max_a' Q_target(s', a')
-                target[i][action[i]] = reward[i] + self.gamma * (np.amax(target_next[i]))
-
-        # Train the Neural Network with batches
-        self.model.fit(state, target, batch_size=self.batch_size, verbose=0)
-        
-    def load(self, name):
-        self.model = load_model(name)
-
-    def save(self, name):
-        self.model.save(name)
+                b_ = b
+                x_ = x
+                    
+                # Assume that parameters are identical for all valves,
+                Kv1 = Kv; Kv2 = Kv;
+                b1 = b_; b2 = b_;
+                x1 = x_; x2 = x_;
+                    
+                for i in range(valCount):
+                    if (b1*P_1 < P_2) and (P_2 <= P_1):
+                        Q[i] = Kv1*(P_1-P_2)**x1
+                    elif  P_2 <= b1*P_1:
+                        Q[i] = Kv1*((1-b1)*P_1)**x1
+                    elif (b2*P_2 < P_1) and (P_1 <P_2):
+                        Q[i] = -Kv2*(P_2 - P_1)**x2
+                    elif P_1 <= b2*P_2:
+                        Q[i] = -Kv2*((1-b2)*P_2)**x2
+                Qsum = Q.sum()
+                                        
+                return Qsum
             
-    def run(self):
-        for e in range(self.EPISODES):
-            state, _ = self.env.reset()
-            state = np.reshape(state, [1, self.state_size])
-            done = False
-            i = 0
-            self.time = 0
-            # plt.cla()
-            self.axs[1].clear
-            self.axs[0].clear
-            while not done:
-                # self.env.render()
-                self.time += self.tau
-                self.axs[0].scatter(self.time,state[0,0])
-                self.axs[1].scatter(self.time,state[0,3])
-                plt.pause(self.tau)
-                action = self.act(state)
-                next_state, reward, done, _ = self.env.step(action,0.23)
-                print(next_state[0], next_state[2], reward, done)
-                next_state = np.reshape(next_state, [1, self.state_size])
-                if not done or i == self.env._max_episode_steps-1: # 100
-                    reward = reward
-                    # print(reward)
-                else:
-                    reward = -500
-                self.remember(state, action, reward, next_state, done)
-                state = next_state
-                i += 1
-                if done:                   
-                    print("episode: {}/{}, score: {}, e: {:.2}".format(e, self.EPISODES, i, self.epsilon))
-                    if i == 500:
-                        print("Saving trained model as dfcuEHS-dqn.h5")
-                        self.save("dfcuEHS-dqn.h5")
-                        return
-                self.replay()
+        x, x_dot, error, e_dot, Pa, Pb = self.state
 
-    def test(self):
-        self.load("dfcuEHS-dqn.h5")
-        for e in range(self.EPISODES):
-            state = self.env.reset()
-            state = np.reshape(state, [1, self.state_size])
-            done = False
-            i = 0
-            while not done:
-                self.env.render()
-                action = np.argmax(self.model.predict(state))
-                next_state, reward, done, _ = self.env.step(action)
-                state = np.reshape(next_state, [1, self.state_size])
-                i += 1
-                if done:
-                    print("episode: {}/{}, score: {}".format(e, self.EPISODES, i))
-                    break
-# %%
-if __name__ == "__main__":
-    agent = DQNAgent()
-    agent.run()
-    # agent.test()
+        def valve_seq(action):
+            valve = np.arange(0,5)
+
+            c = np.array(np.meshgrid(valve,valve)).T.reshape(-1,2)
+            d = np.zeros((len(c),2))
+
+            action_1 = np.concatenate((c[:,0].reshape(-1,1),d[:,0].reshape(-1,1),
+                               d[:,0].reshape(-1,1),c[:,1].reshape(-1,1)), 
+                              axis=1)
+
+            action_2 = np.concatenate((d[:,0].reshape(-1,1),c[:,0].reshape(-1,1),
+                               c[:,1].reshape(-1,1),d[:,0].reshape(-1,1)),
+                              axis=1)
+
+            action_space = np.vstack((action_1,action_2))
+            
+            return action_space[action-1,:]
+            
+            
+        valve_decode_seq = valve_seq(action)
+        cPA = valve_decode_seq[0]
+        cAT = valve_decode_seq[1]
+        cPB = valve_decode_seq[2]
+        cBT = valve_decode_seq[3]
+        
+        # Friction Force
+        Ffric = np.tanh(2000*x_dot) * (280+70*np.exp(-1e4*(x_dot**2))) + 100*x_dot
+        
+        # if self.Pa is None:
+        #     Pa = 0
+        # if self.Pb is None:
+        #     Pb = 0
+        
+        
+        # Flow [m^3/s]
+        QPA = flow_vector(self.Ps,Pa,cPA*self.Kv,self.b,self.ex)
+        QAT = flow_vector(Pa,self.Pt,cAT*self.Kv,self.b,self.ex)
+        QPB = flow_vector(self.Ps,Pb,cPB*self.Kv,self.b,self.ex)
+        QBT = flow_vector(Pb,self.Pt,cBT*self.Kv,self.b,self.ex)
+        
+        # x = round(x,5)
+        # x_dot = round(x_dot,5)
+        # error = round(error,5)
+        # e_dot = round(e_dot,5)
+        # Pa = round(Pa,5)
+        # Pb = round(Pb,5)
+
+        # Semi implicit euler
+        x_2dot = (Pa*self.Aa-Pb*self.Ab-Ffric-self.Fload)/self.m # Accel. [m/s^2]
+        x_dot = x_dot + self.tau * x_2dot # Velocity [m/s]
+        x = x + self.tau * x_dot # Position [m]
+        Pad_1 = (self.Ba*(QPA-QAT-self.Aa*x_dot));
+        Pad_2 = x*self.Aa+self.V0A;
+        Pa_dot = Pad_1/Pad_2; # Piston side pressure differential [Pa/s]
+        Pa = Pa + self.tau * Pa_dot # Piston side pressure [Pa]
+        Pbd_1 = (self.Bb*(QPB-QBT+self.Ab*x_dot));
+        Pbd_2 = (self.xMax-x)*self.Ab+self.V0B;
+        Pb_dot = Pbd_1/Pbd_2; # Rod side pressure differential [Pa/s]
+        Pb = Pb + self.tau * Pb_dot # Rod side pressure [Pa]
+
+        error = ref - x # Error
+
+        # Termination criteria, isDone
+        done = bool(
+            x < self.xMin
+            or x > self.xMax
+            or np.abs(error) > 0.01
+        )
+ 
+        try:
+            e_dot = (abs(error)-abs(self.ePrev))/self.tau
+        except:
+            e_dot = (abs(error)-0)/self.tau
+            
+        self.ePrev = error
+        
+        self.state = (x, x_dot, error, e_dot, Pa, Pb)
+        
+        # Define reward
+        # coef = 1;
+        if abs(error) < 1e-3:
+            error = 1e-3
+        
+        r1 = 1e-5/error**2
+        if valve_decode_seq.sum() == 0:
+            r2 = 1
+        else:
+            r2 = 1/valve_decode_seq.sum()**2
+        reward = r1+r2
+        
+        # a = 0.005-np.tanh(abs(e));  
+        # if a > 0:
+        #     r1 = 50*a*coef;
+        # else:
+        #     r1 = a*coef;
+                    
+        # if valve_decode_seq.sum() > 0:
+        #     r2 = -0.01*(1-(1/valve_decode_seq.sum()**2))*coef;
+        # else:
+        #     r2 = 0;
+                
+        # if e_dot >= 0:
+        #     r3 = -1e-3*coef
+        # else:
+        #     r3 = 1e-2*coef; # 0
+
+        # r4 = -500*done*coef
+
+        # reward = (r1+r2+r3+r4)*coef
+
+        if self.step_count > self.max_episode_steps:
+            done = bool(1)
+                
+        return np.array(self.state), reward, done, {}
+    
+
+    def reset(self):
+        x_init = self.np_random.uniform(low=0.2, high=0.25, size=(1,))
+        x_init[0] = round(x_init[0],5)
+        self.state = [x_init[0], 0, 0, 0, 0, 0]
+        self.ePrev = None
+        # self.time = 0
+
+        self.step_count = 0
+        return np.array(self.state), self.step_count
+    
+    # def render(self):
+        # self.t += self.tau
+        # self.ax.plot(self.t,self.state[0])
+    
+
+    
