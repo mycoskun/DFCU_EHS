@@ -112,7 +112,7 @@ class DFCU_EHSEnv(gym.Env):
         self.state = None
         
         self.step_count = 0
-        self.simTime = 0.001 # Simulation time (second)
+        self.simTime = 10 # Simulation time (second)
         self.max_episode_steps = (self.simTime/self.tau)+1
         self.steps_beyond_done = None
         self.t = 0
