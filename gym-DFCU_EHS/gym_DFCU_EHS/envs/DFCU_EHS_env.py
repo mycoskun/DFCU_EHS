@@ -208,6 +208,13 @@ class DFCU_EHSEnv(gym.Env):
         QAT = flow_vector(Pa,self.Pt,cAT*self.Kv,self.b,self.ex)
         QPB = flow_vector(self.Ps,Pb,cPB*self.Kv,self.b,self.ex)
         QBT = flow_vector(Pb,self.Pt,cBT*self.Kv,self.b,self.ex)
+        
+        x = round(x,5)
+        x_dot = round(x_dot,5)
+        error = round(error,5)
+        e_dot = round(e_dot,5)
+        Pa = round(Pa,5)
+        Pb = round(Pb,5)
 
         # Semi implicit euler
         x_2dot = (Pa*self.Aa-Pb*self.Ab-Ffric-self.Fload)/self.m # Accel. [m/s^2]
@@ -223,7 +230,6 @@ class DFCU_EHSEnv(gym.Env):
         Pb = Pb + self.tau * Pb_dot # Rod side pressure [Pa]
 
         error = ref - x # Error
-        error = round(error,5)
 
         # Termination criteria, isDone
         done = bool(
@@ -246,14 +252,7 @@ class DFCU_EHSEnv(gym.Env):
             e_dot = (abs(error)-0)/self.tau
             
         self.ePrev = error
-        
-        x = round(x,5)
-        x_dot = round(x_dot,5)
-        error = round(error,5)
-        e_dot = round(e_dot,5)
-        Pa = round(Pa,5)
-        Pb = round(Pb,5)
-        
+                
         self.state = (x, x_dot, error, e_dot, Pa, Pb)
         
         # Define reward
