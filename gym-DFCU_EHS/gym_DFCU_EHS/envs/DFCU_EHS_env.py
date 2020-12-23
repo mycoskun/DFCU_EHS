@@ -252,13 +252,10 @@ class DFCU_EHSEnv(gym.Env):
         # coef = 1;
         if e < 1e-3:
             e = 1e-3
-        if e_dot == 0:
-            e_dot = np.spacing(1)
-        
+
         r1 = 1e-4/e**2
         r2 = 1/valve_decode_seq.sum()**2
-        r3 = 1e2/e_dot
-        reward = r1+r2-r3
+        reward = r1+r2
         
         # a = 0.005-np.tanh(abs(e));  
         # if a > 0:
