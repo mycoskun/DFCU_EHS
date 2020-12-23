@@ -167,7 +167,7 @@ class DFCU_EHSEnv(gym.Env):
                                         
                 return Qsum
             
-        x, x_dot, e, e_dot, Pa, Pb = self.state
+        x, x_dot, error, e_dot, Pa, Pb = self.state
 
         def valve_seq(action):
             valve = np.arange(0,5)
@@ -228,7 +228,7 @@ class DFCU_EHSEnv(gym.Env):
         done = bool(
             x < self.xMin
             or x > self.xMax
-            or np.abs(error) > 0.1
+            or np.abs(error) > 0.01
         )
  
 
@@ -246,19 +246,18 @@ class DFCU_EHSEnv(gym.Env):
             
         self.ePrev = error
             
-        self.state = (x, x_dot, e, e_dot, Pa, Pb)
+        self.state = (x, x_dot, error, e_dot, Pa, Pb)
         
         # Define reward
         # coef = 1;
-        if e < 1e-3:
-            e = 1e-3
-
-        r1 = 1e-4/e**2
+        if error < 1e-3:
+            error = 1e-3
+        
+        r1 = 1e-4/error**2
         if valve_decode_seq.sum() == 0:
             r2 = 1
         else:
             r2 = 1/valve_decode_seq.sum()**2
-            
         reward = r1+r2
         
         # a = 0.005-np.tanh(abs(e));  
