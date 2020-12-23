@@ -223,6 +223,7 @@ class DFCU_EHSEnv(gym.Env):
         Pb = Pb + self.tau * Pb_dot # Rod side pressure [Pa]
 
         error = ref - x # Error
+        error = round(error,5)
 
         # Termination criteria, isDone
         done = bool(
