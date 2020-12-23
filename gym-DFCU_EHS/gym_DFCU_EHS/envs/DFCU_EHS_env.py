@@ -245,12 +245,19 @@ class DFCU_EHSEnv(gym.Env):
             e_dot = (abs(error)-0)/self.tau
             
         self.ePrev = error
-            
+        
+        x = round(x,5)
+        x_dot = round(x_dot,5)
+        error = round(error,5)
+        e_dot = round(e_dot,5)
+        Pa = round(Pa,5)
+        Pb = round(Pb,5)
+        
         self.state = (x, x_dot, error, e_dot, Pa, Pb)
         
         # Define reward
         # coef = 1;
-        if abs(error) < 1e-3:
+        if error < 1e-3:
             error = 1e-3
         
         r1 = 1e-4/error**2
@@ -286,6 +293,7 @@ class DFCU_EHSEnv(gym.Env):
 
     def reset(self):
         x_init = self.np_random.uniform(low=0.2, high=0.25, size=(1,))
+        x_init[0] = round(x_init[0],5)
         self.state = [x_init[0], 0, 0, 0, 0, 0]
         self.ePrev = None
         # self.time = 0
