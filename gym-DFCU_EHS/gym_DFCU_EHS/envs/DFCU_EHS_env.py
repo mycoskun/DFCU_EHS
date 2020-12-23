@@ -254,7 +254,11 @@ class DFCU_EHSEnv(gym.Env):
             e = 1e-3
 
         r1 = 1e-4/e**2
-        r2 = 1/valve_decode_seq.sum()**2
+        if valve_decode_seq.sum() == 0:
+            r2 = 1
+        else:
+            r2 = 1/valve_decode_seq.sum()**2
+            
         reward = r1+r2
         
         # a = 0.005-np.tanh(abs(e));  
