@@ -250,7 +250,7 @@ class DFCU_EHSEnv(gym.Env):
         
         # Define reward
         # coef = 1;
-        if error < 1e-3:
+        if abs(error) < 1e-3:
             error = 1e-3
         
         r1 = 1e-4/error**2
