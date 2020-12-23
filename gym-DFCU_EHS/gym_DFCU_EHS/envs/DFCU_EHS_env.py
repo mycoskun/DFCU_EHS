@@ -228,7 +228,7 @@ class DFCU_EHSEnv(gym.Env):
         done = bool(
             x < self.xMin
             or x > self.xMax
-            or np.abs(error) > 0.001
+            or np.abs(error) > 0.01
         )
  
 
@@ -247,26 +247,31 @@ class DFCU_EHSEnv(gym.Env):
         self.state = (x, x_dot, e, e_dot, Pa, Pb)
         
         # Define reward
-        coef = 1;
-        a = 0.005-np.tanh(abs(e));  
-        if a > 0:
-            r1 = 50*a*coef;
-        else:
-            r1 = a*coef;
-                    
-        if valve_decode_seq.sum() > 0:
-            r2 = -0.01*(1-(1/valve_decode_seq.sum()**2))*coef;
-        else:
-            r2 = 0;
-                
-        if e_dot >= 0:
-            r3 = -1e-3*coef;
-        else:
-            r3 = 1e-2*coef; # 0
+        # coef = 1;
+        r1 = 1e-4/e**2
+        r2 = 1/valve_decode_seq.sum()**2
+        r3 = 1e2/e_dot
+        reward = r1+r2-r3
 
-        r4 = -500*done*coef;
+       # a = 0.005-np.tanh(abs(e));  
+       # if a > 0:
+       #     r1 = 50*a*coef;
+       # else:
+       #     r1 = a*coef;
+       #             
+       # if valve_decode_seq.sum() > 0:
+       #     r2 = -0.01*(1-(1/valve_decode_seq.sum()**2))*coef;
+       # else:
+       #     r2 = 0;
+       #         
+       # if e_dot >= 0:
+       #     r3 = -1e-3*coef;
+       # else:
+       #     r3 = 1e-2*coef; # 0
 
-        reward = (r1+r2+r3+r4)*coef;
+       # r4 = -500*done*coef;
+
+       # reward = (r1+r2+r3+r4)*coef;
 
 
         return np.array(self.state), reward, done, {}
@@ -284,6 +289,3 @@ class DFCU_EHSEnv(gym.Env):
     # def render(self):
         # self.t += self.tau
         # self.ax.plot(self.t,self.state[0])
-    
-
-    
